@@ -1,0 +1,101 @@
+variables:
+  AZURE_BUILD: true
+
+trigger:
+- master
+
+jobs:
+- job: 'Test'
+  displayName: 'Unit tests'
+
+  pool:
+    vmImage: $(image.name)
+
+  strategy:
+    matrix:
+      linux-python37:
+        image.name: 'ubuntu-latest'
+        python.version: '3.7'
+      linux-python38:
+        image.name: 'ubuntu-latest'
+        python.version: '3.8'
+      linux-python39:
+        image.name: 'ubuntu-latest'
+        python.version: '3.9'
+      linux-python310:
+        image.name: 'ubuntu-latest'
+        python.version: '3.10'
+      linux-python311:
+        image.name: 'ubuntu-latest'
+        python.version: '3.11'
+      osx-python37:
+        image.name: 'macos-12'
+        python.version: '3.7'
+      osx-python38:
+        image.name: 'macos-12'
+        python.version: '3.8'
+      osx-python39:
+        image.name: 'macos-12'
+        python.version: '3.9'
+      osx-python310:
+        image.name: 'macos-12'
+        python.version: '3.10'
+      osx-python311:
+        image.name: 'macos-12'
+        python.version: '3.11'
+      windows-python37:
+        image.name: 'windows-2019'
+        python.version: '3.7'
+      windows-python38:
+        image.name: 'windows-2019'
+        python.version: '3.8'
+      windows-python39:
+        image.name: 'windows-2019'
+        python.version: '3.9'
+      windows-python310:
+        image.name: 'windows-2019'
+        python.version: '3.10'
+      windows-python311:
+        image.name: 'windows-2019'
+        python.version: '3.11'
+
+  steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+      architecture: 'x64'
+    displayName: 'Use Python $(python.version)'
+
+  - script: env
+    displayName: 'List enviromental variables'
+
+  - script: |
+      python -m pip install --upgrade pip
+      python -m pip install flake8 pytest
+      python -m pip install numpy
+    displayName: 'Install job dependencies'
+
+  # stop the build if there are Python syntax errors or undefined names
+  - script: flake8 . --count --select=E901,E999,F821,F822,F823 --show-source --statistics
+    displayName: 'Check for syntax errors'
+
+  - script: pip install -vv .
+    displayName: 'Install package'
+
+  - script: pip install pynndescent
+    displayName: 'Install optional dependencies - pynndescent'
+
+  - script: pip install hnswlib
+    env:
+      HNSWLIB_NO_NATIVE: 1  # -march=native is not available on clang, so just disable it
+    displayName: 'Install optional dependencies - hnswlib'
+
+  # Since Python automatically adds `cwd` to `sys.path`, it's important we remove the local folder
+  # containing our code from the working directory. Otherwise, the tests will use the local copy
+  # instead of the installed package. We can easily achieve this by renaming the source folder.
+  - bash: mv openTSNE src
+    displayName: 'Remove source files from path'
+
+  - script: pytest -v
+    timeoutInMinutes: 15
+    displayName: 'Run unit tests'

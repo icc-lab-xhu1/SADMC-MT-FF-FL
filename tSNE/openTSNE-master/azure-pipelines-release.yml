@@ -1,0 +1,274 @@
+variables:
+  AZURE_BUILD: true
+
+trigger:
+  tags:
+    include:
+      - v*
+
+pr: none
+
+jobs:
+  - job: 'PackageWinOsx'
+    timeoutInMinutes: 0
+    cancelTimeoutInMinutes: 10
+    displayName: 'Build wheels ::'
+    pool:
+      vmImage: $(image.name)
+
+    strategy:
+      matrix:
+        osx - python37:
+          image.name: 'macos-12'
+          python.version: '3.7'
+          ciwb.build: cp37-macosx_x86_64
+          ciwb.archs: x86_64
+        osx - python38:
+          image.name: 'macos-12'
+          python.version: '3.8'
+          ciwb.build: cp38-macosx_x86_64
+          ciwb.archs: x86_64
+        osx - python39:
+          image.name: 'macos-12'
+          python.version: '3.9'
+          ciwb.build: cp39-macosx_universal2
+          ciwb.archs: universal2
+        osx - python310:
+          image.name: 'macos-12'
+          python.version: '3.10'
+          ciwb.build: cp310-macosx_universal2
+          ciwb.archs: universal2
+        osx - python311:
+          image.name: 'macos-12'
+          python.version: '3.11'
+          ciwb.build: cp311-macosx_universal2
+          ciwb.archs: universal2
+
+        windows - python37:
+          image.name: 'windows-2019'
+          python.version: '3.7'
+          ciwb.build: cp37-win_amd64
+          ciwb.archs: AMD64
+        windows - python38:
+          image.name: 'windows-2019'
+          python.version: '3.8'
+          ciwb.build: cp38-win_amd64
+          ciwb.archs: AMD64
+        windows - python39:
+          image.name: 'windows-2019'
+          python.version: '3.9'
+          ciwb.build: cp39-win_amd64
+          ciwb.archs: AMD64
+        windows - python310:
+          image.name: 'windows-2019'
+          python.version: '3.10'
+          ciwb.build: cp310-win_amd64
+          ciwb.archs: AMD64
+        windows - python311:
+          image.name: 'windows-2019'
+          python.version: '3.11'
+          ciwb.build: cp311-win_amd64
+          ciwb.archs: AMD64
+
+    steps:
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: '$(python.version)'
+          architecture: 'x64'
+        displayName: 'Use Python $(python.version)'
+
+      - script: env
+        displayName: 'List enviromental variables'
+
+      - script: python -m pip install cibuildwheel
+        displayName: Installing build tools
+
+      - script: python -m cibuildwheel --output-dir dist/
+        displayName: 'Build wheel'
+        env:
+          CIBW_BUILD: $(ciwb.build)
+          CIBW_ARCHS: $(ciwb.archs)
+
+      # Since Python automatically adds `cwd` to `sys.path`, it's important we remove the local folder
+      # containing our code from the working directory. Otherwise, the tests will use the local copy
+      # instead of the installed package. We can easily achieve this by renaming the source folder.
+      - bash: mv openTSNE src
+        displayName: 'Remove source files from path'
+
+      - bash: ls -lRh dist
+        displayName: 'List built files'
+
+      - bash: python -m pip install --force-reinstall --find-links dist openTSNE
+        displayName: 'Install wheel'
+
+      - script: pip install pynndescent
+        displayName: 'Install optional dependencies - pynndescent'
+
+      - script: pip install hnswlib
+        env:
+          HNSWLIB_NO_NATIVE: 1  # -march=native is not available on clang, so just disable it
+        displayName: 'Install optional dependencies - hnswlib'
+
+      - bash: pip install pytest
+        displayName: 'Install pytest'
+
+      - script: pytest -v
+        timeoutInMinutes: 15
+        displayName: 'Run unit tests'
+
+      - task: CopyFiles@2
+        condition: eq(variables['Agent.JobStatus'], 'Succeeded')
+        inputs:
+          contents: dist/**
+          targetFolder: $(Build.ArtifactStagingDirectory)
+
+      - task: PublishBuildArtifacts@1
+        condition: eq(variables['Agent.JobStatus'], 'Succeeded')
+        inputs:
+          artifactName: 'build'
+          pathtoPublish: $(Build.ArtifactStagingDirectory)
+
+
+  - job: 'PackageLinux'
+    timeoutInMinutes: 0
+    cancelTimeoutInMinutes: 10
+    displayName: 'Build wheels :: linux -'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    strategy:
+      matrix:
+        python37:
+          python: '/opt/python/cp37-cp37m/bin'
+          python.version: '3.7'
+        python38:
+          python: '/opt/python/cp38-cp38/bin'
+          python.version: '3.8'
+        python39:
+          python: '/opt/python/cp39-cp39/bin'
+          python.version: '3.9'
+        python310:
+          python: '/opt/python/cp310-cp310/bin'
+          python.version: '3.10'
+        python311:
+          python: '/opt/python/cp311-cp311/bin'
+          python.version: '3.11'
+
+    container:
+      image: quay.io/pypa/manylinux2014_x86_64:latest
+      options: -e PLAT=manylinux2014_x86_64
+
+    steps:
+      - bash: ls -R /opt/python
+        displayName: 'List available Python binaries'
+
+      - script: $(python)/pip install --user build
+        displayName: 'Installing build tools'
+
+      - script: $(python)/python -m build -w -o wheelhouse/ .
+        displayName: 'Build wheels'
+
+      # Bundle external shared libraries into the wheels
+      - script: |
+          for whl in wheelhouse/openTSNE*.whl; do
+              auditwheel show "$whl"
+              auditwheel repair "$whl" --plat $PLAT -w wheelhouse/
+          done
+        displayName: 'Repair wheels'
+
+      # Since Python automatically adds `cwd` to `sys.path`, it's important we remove the local folder
+      # containing our code from the working directory. Otherwise, the tests will use the local copy
+      # instead of the installed package. We can easily achieve this by renaming the source folder.
+      - bash: mv openTSNE src
+        displayName: 'Remove source files from path'
+
+      - script: $(python)/pip install --force-reinstall --find-links wheelhouse openTSNE
+        displayName: 'Install openTSNE wheel'
+
+      - script: $(python)/pip install pynndescent
+        displayName: 'Install optional dependencies - pynndescent'
+
+      - script: $(python)/pip install hnswlib
+        displayName: 'Install optional dependencies - hnswlib'
+
+      - bash: $(python)/pip install --user pytest
+        displayName: 'Install pytest'
+
+      - script: $(python)/python -m pytest -v
+        timeoutInMinutes: 15
+        displayName: 'Run unit tests'
+
+      - bash: |
+          ls -lRh wheelhouse
+          mkdir -p dist
+          cp wheelhouse/openTSNE*manylinux*.whl dist/
+        displayName: 'Copy files to dist folder'
+
+      - task: CopyFiles@2
+        condition: eq(variables['Agent.JobStatus'], 'Succeeded')
+        inputs:
+          contents: dist/**
+          targetFolder: $(Build.ArtifactStagingDirectory)
+
+      - task: PublishBuildArtifacts@1
+        condition: eq(variables['Agent.JobStatus'], 'Succeeded')
+        inputs:
+          artifactName: 'build'
+          pathtoPublish: $(Build.ArtifactStagingDirectory)
+
+
+  - job: 'sdist'
+    timeoutInMinutes: 0
+    cancelTimeoutInMinutes: 10
+    displayName: 'Package source distribution'
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+      - task: UsePythonVersion@0
+        displayName: 'Use Python 3.10'
+        inputs:
+          versionSpec: '3.10'
+
+      - script: python -m pip install build
+        displayName: Installing build tools
+
+      - script: python -m build -s .
+        displayName: 'Build sdist'
+
+      # Since Python automatically adds `cwd` to `sys.path`, it's important we remove the local folder
+      # containing our code from the working directory. Otherwise, the tests will use the local copy
+      # instead of the installed package. We can easily achieve this by renaming the source folder.
+      - bash: mv openTSNE src
+        displayName: 'Remove source files from path'
+
+      - bash: ls -lRh dist
+        displayName: 'List built files'
+
+      - bash: python -m pip install --force-reinstall --find-links dist openTSNE
+        displayName: 'Install package'
+
+      - script: pip install pynndescent
+        displayName: 'Install optional dependencies - pynndescent'
+
+      - script: pip install hnswlib
+        displayName: 'Install optional dependencies - hnswlib'
+
+      - bash: pip install pytest
+        displayName: 'Install pytest'
+
+      - script: pytest -v
+        timeoutInMinutes: 15
+        displayName: 'Run unit tests'
+
+      - task: CopyFiles@2
+        condition: eq(variables['Agent.JobStatus'], 'Succeeded')
+        inputs:
+          contents: dist/**
+          targetFolder: $(Build.ArtifactStagingDirectory)
+
+      - task: PublishBuildArtifacts@1
+        condition: eq(variables['Agent.JobStatus'], 'Succeeded')
+        inputs:
+          artifactName: 'build'
+          pathtoPublish: $(Build.ArtifactStagingDirectory)
